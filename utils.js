@@ -1,0 +1,218 @@
+const Eris = require('eris');
+const bot = require('./bot');
+const moment = require('moment');
+const publicIp = require('public-ip');
+const attachments = require('./data/attachments');
+const config = require('./config');
+
+class BotError extends Error {}
+
+const userMentionRegex = /^<@\!?([0-9]+?)>$/;
+
+let inboxGuild = null;
+let mainGuild = null;
+let logChannel = null;
+
+/**
+ * @returns {Eris~Guild}
+ */
+function getInboxGuild() {
+  if (! inboxGuild) inboxGuild = bot.guilds.find(g => g.id === config.mailGuildId);
+  if (! inboxGuild) throw new BotError('The bot is not on the modmail (inbox) server!');
+  return inboxGuild;
+}
+
+/**
+ * @returns {Eris~Guild}
+ */
+function getMainGuild() {
+  if (! mainGuild) mainGuild = bot.guilds.find(g => g.id === config.mainGuildId);
+  if (! mainGuild) console.warn('[WARN] The bot is not on the main server! If this is intentional, you can ignore this warning.');
+  return mainGuild;
+}
+
+/**
+ * Returns the designated log channel, or the default channel if none is set
+ * @param bot
+ * @returns {Eris~TextChannel}
+ */
+function getLogChannel() {
+  const inboxGuild = getInboxGuild();
+
+  if (! config.logChannelId) {
+    logChannel = inboxGuild.channels.get(inboxGuild.id);
+  } else if (! logChannel) {
+    logChannel = inboxGuild.channels.get(config.logChannelId);
+  }
+
+  if (! logChannel) {
+    throw new BotError('Log channel not found!');
+  }
+
+  return logChannel;
+}
+
+function postLog(...args) {
+  getLogChannel().createMessage(...args);
+}
+
+function postError(str) {
+  getLogChannel().createMessage({
+    content: `@here **Error:** ${str.trim()}`,
+    disableEveryone: false
+  });
+}
+
+/**
+ * Returns whether the given member has permission to use modmail commands
+ * @param member
+ * @returns {boolean}
+ */
+function isStaff(member) {
+  if (! config.inboxServerPermission) return true;
+  return member.permission.has(config.inboxServerPermission);
+}
+
+/**
+ * Returns whether the given message is on the inbox server
+ * @param msg
+ * @returns {boolean}
+ */
+function messageIsOnInboxServer(msg) {
+  if (! msg.channel.guild) return false;
+  if (msg.channel.guild.id !== getInboxGuild().id) return false;
+  return true;
+}
+
+/**
+ * Returns whether the given message is on the main server
+ * @param msg
+ * @returns {boolean}
+ */
+function messageIsOnMainServer(msg) {
+  if (! msg.channel.guild) return false;
+  if (msg.channel.guild.id !== getMainGuild().id) return false;
+  return true;
+}
+
+/**
+ * @param attachment
+ * @returns {Promise<string>}
+ */
+async function formatAttachment(attachment) {
+  let filesize = attachment.size || 0;
+  filesize /= 1024;
+
+  const attachmentUrl = await attachments.getUrl(attachment.id, attachment.filename);
+  return `**Attachment:** ${attachment.filename} (${filesize.toFixed(1)}KB)\n${attachmentUrl}`;
+}
+
+/**
+ * Returns the user ID of the user mentioned in str, if any
+ * @param {String} str
+ * @returns {String|null}
+ */
+function getUserMention(str) {
+  str = str.trim();
+
+  if (str.match(/^[0-9]+$/)) {
+    // User ID
+    return str;
+  } else {
+    let mentionMatch = str.match(userMentionRegex);
+    if (mentionMatch) return mentionMatch[1];
+  }
+
+  return null;
+}
+
+/**
+ * Returns the current timestamp in an easily readable form
+ * @returns {String}
+ */
+function getTimestamp(...momentArgs) {
+  return moment.utc(...momentArgs).format('HH:mm');
+}
+
+/**
+ * Disables link previews in the given string by wrapping links in < >
+ * @param {String} str
+ * @returns {String}
+ */
+function disableLinkPreviews(str) {
+  return str.replace(/(^|[^<])(https?:\/\/\S+)/ig, '$1<$2>');
+}
+
+/**
+ * Returns a URL to the bot's web server
+ * @param {String} path
+ * @returns {Promise<String>}
+ */
+async function getSelfUrl(path = '') {
+  if (config.url) {
+    return `${config.url}/${path}`;
+  } else {
+    const port = config.port || 8890;
+    const ip = await publicIp.v4();
+    return `http://${ip}:${port}/${path}`;
+  }
+}
+
+/**
+ * Returns the highest hoisted role of the given member
+ * @param {Eris~Member} member
+ * @returns {Eris~Role}
+ */
+function getMainRole(member) {
+  const roles = member.roles.map(id => member.guild.roles.get(id));
+  roles.sort((a, b) => a.position > b.position ? -1 : 1);
+  return roles.find(r => r.hoist);
+}
+
+/**
+ * Splits array items into chunks of the specified size
+ * @param {Array} items
+ * @param {Number} chunkSize
+ * @returns {Array}
+ */
+function chunk(items, chunkSize) {
+  const result = [];
+
+  for (let i = 0; i < items.length; i += chunkSize) {
+    result.push(items.slice(i, i + chunkSize));
+  }
+
+  return result;
+}
+
+function trimAll(str) {
+  return str
+    .split('\n')
+    .map(str => str.trim())
+    .join('\n');
+}
+
+module.exports = {
+  BotError,
+
+  getInboxGuild,
+  getMainGuild,
+  getLogChannel,
+  postError,
+  postLog,
+
+  isStaff,
+  messageIsOnInboxServer,
+  messageIsOnMainServer,
+
+  formatAttachment,
+
+  getUserMention,
+  getTimestamp,
+  disableLinkPreviews,
+  getSelfUrl,
+  getMainRole,
+
+  chunk,
+  trimAll,
+};
